@@ -11,9 +11,8 @@ pipeline {
     environment {
         PYTHON        = "python3"
         SONAR_PROJECT = "exam-grader"
-        // SonarQube server name configured in Jenkins → Manage → Configure System
         SONAR_SERVER  = "SonarQube"
-        HF_REPO = "RuchirKadam1729/autograder-miniproj"   // ← change this
+        HF_REPO       = "RuchirKadam1729/autograder-miniproj"
     }
 
     stages {
@@ -44,10 +43,10 @@ pipeline {
             steps {
                 sh """
                     . .venv/bin/activate
-                    flake8 src/ app.py \
-                        --max-line-length=100 \
-                        --exclude=__pycache__ \
-                        --format=default \
+                    flake8 src/ app.py \\
+                        --max-line-length=100 \\
+                        --exclude=__pycache__ \\
+                        --format=default \\
                         --output-file=flake8-report.txt || true
                     cat flake8-report.txt
                 """
@@ -64,10 +63,10 @@ pipeline {
             steps {
                 sh """
                     . .venv/bin/activate
-                    pytest tests/ \
-                        --cov=src \
-                        --cov-report=xml:coverage.xml \
-                        --cov-report=term \
+                    pytest tests/ \\
+                        --cov=src \\
+                        --cov-report=xml:coverage.xml \\
+                        --cov-report=term \\
                         -v || true
                 """
             }
@@ -84,14 +83,16 @@ pipeline {
             steps {
                 withSonarQubeEnv(env.SONAR_SERVER) {
                     withCredentials([string(credentialsId: "SONAR_TOKEN", variable: "SONAR_AUTH")]) {
-                        sh """
-                            sonar-scanner \
-                                -Dsonar.login=${SONAR_AUTH} \
-                                -Dsonar.projectKey=${SONAR_PROJECT} \
-                                -Dsonar.sources=src,app.py \
-                                -Dsonar.tests=tests \
-                                -Dsonar.python.coverage.reportPaths=coverage.xml
-                        """
+                        withEnv(["PATH+SONAR=${tool 'sonar-scanner'}/bin"]) {
+                            sh """
+                                sonar-scanner \\
+                                    -Dsonar.login=${SONAR_AUTH} \\
+                                    -Dsonar.projectKey=${SONAR_PROJECT} \\
+                                    -Dsonar.sources=src,app.py \\
+                                    -Dsonar.tests=tests \\
+                                    -Dsonar.python.coverage.reportPaths=coverage.xml
+                            """
+                        }
                     }
                 }
             }
@@ -113,22 +114,22 @@ pipeline {
             }
             steps {
                 withCredentials([string(credentialsId: "HF_TOKEN", variable: "HF_AUTH")]) {
-                    sh """
+                    sh '''
                         pip install huggingface_hub
-                        python - <<EOF
+                        python3 - <<'PYEOF'
 from huggingface_hub import HfApi
 import os
 
-api = HfApi(token="${HF_AUTH}")
+api = HfApi(token=os.environ["HF_AUTH"])
 api.upload_folder(
     folder_path=".",
-    repo_id="${HF_REPO}",
+    repo_id=os.environ["HF_REPO"],
     repo_type="space",
     ignore_patterns=["*.pyc", "__pycache__", ".venv", ".git", "tests"],
 )
-print("✅ Deployed to https://huggingface.co/spaces/${HF_REPO}")
-EOF
-                    """
+print("Deployed!")
+PYEOF
+                    '''
                 }
             }
         }
