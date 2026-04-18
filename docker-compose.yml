@@ -1,5 +1,3 @@
-version: "3.8"
-
 # ── Local DevOps Stack: SonarQube + Jenkins ───────────────────────────────────
 # Usage:
 #   docker compose up -d

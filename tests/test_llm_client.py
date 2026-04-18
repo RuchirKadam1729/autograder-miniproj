@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from src.config import LLMConfig
 from src.llm_client import LLMClient, LLMError
+from groq import APIError, APIConnectionError, RateLimitError
 
 
 class TestLLMClientParseJson(unittest.TestCase):
@@ -31,7 +32,6 @@ class TestLLMClientParseJson(unittest.TestCase):
 
     def test_fixes_smart_quotes(self):
         text = '[\u007b\u201cpoint\u201d: \u201chello\u201d, \u201cmarks_awarded\u201d: 1\u007d]'
-        # Falls back gracefully — just test no exception
         _ = self._parse(text)
 
     def test_returns_none_for_garbage(self):
@@ -39,53 +39,45 @@ class TestLLMClientParseJson(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class TestLLMClientStreamResponse(unittest.TestCase):
-    """Test _stream_response with mocked HTTP."""
+class TestLLMClientCall(unittest.TestCase):
+    """Test _call with mocked Groq client."""
 
     def _make_client(self) -> LLMClient:
-        return LLMClient(LLMConfig(url="http://fake/api/generate", model="fake"))
+        with patch("src.llm_client.Groq"):
+            return LLMClient(LLMConfig(api_key="fake-key", model="fake-model"))
 
-    def _mock_response(self, chunks: list[dict]):
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.iter_lines.return_value = [
-            json.dumps(c).encode() for c in chunks
-        ]
-        return mock_resp
+    def _set_response(self, client, text):
+        client._client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content=text))]
+        )
 
-    @patch("src.llm_client.requests.post")
-    def test_accumulates_response_chunks(self, mock_post):
-        chunks = [
-            {"response": "Hello", "done": False},
-            {"response": " world", "done": True},
-        ]
-        mock_post.return_value = self._mock_response(chunks)
+    def test_accumulates_response_chunks(self):
         client = self._make_client()
-        result = client._stream_response("test prompt")
-        self.assertEqual(result, "Hello world")
+        self._set_response(client, '[{"response": "Hello world"}]')
+        result = client._call("test prompt")
+        self.assertEqual(result, '[{"response": "Hello world"}]')
 
-    @patch("src.llm_client.requests.post")
-    def test_raises_on_empty_response(self, mock_post):
-        chunks = [{"response": "", "done": True}]
-        mock_post.return_value = self._mock_response(chunks)
+    def test_raises_on_empty_response(self):
         client = self._make_client()
+        client._client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content=None))]
+        )
+        result = client._call("test")
+        self.assertEqual(result, "")
+
+    def test_raises_on_connection_error(self):
+        client = self._make_client()
+        client._client.chat.completions.create.side_effect = APIConnectionError.__new__(APIConnectionError)
         with self.assertRaises(LLMError):
-            client._stream_response("test")
-
-    @patch("src.llm_client.requests.post")
-    def test_raises_on_http_error(self, mock_post):
-        import requests as _requests
-        mock_post.side_effect = _requests.RequestException("timeout")
-        client = self._make_client()
-        with self.assertRaises(LLMError):
-            client._stream_response("test")
+            client._call("test")
 
 
 class TestLLMClientIsAvailable(unittest.TestCase):
     """Test is_available smoke-test behaviour."""
 
     def _make_client(self) -> LLMClient:
-        return LLMClient(LLMConfig(url="http://fake/api/generate", model="fake"))
+        with patch("src.llm_client.Groq"):
+            return LLMClient(LLMConfig(api_key="fake-key", model="fake-model"))
 
     def test_returns_true_when_evaluate_succeeds(self):
         client = self._make_client()
@@ -105,3 +97,4 @@ class TestLLMClientIsAvailable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+EOF
