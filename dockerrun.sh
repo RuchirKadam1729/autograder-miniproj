@@ -1,0 +1,1 @@
+docker run -e GROQ_API_KEY=$(cat secrets/GROQ_API_KEY) -e HF_TOKEN=$(cat secrets/HF_TOKEN) -p 7860:7860 autograder-miniproj
