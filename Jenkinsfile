@@ -13,7 +13,7 @@ pipeline {
         SONAR_PROJECT = "exam-grader"
         // SonarQube server name configured in Jenkins → Manage → Configure System
         SONAR_SERVER  = "SonarQube"
-        HF_REPO       = "your-hf-username/exam-grader"   // ← change this
+        HF_REPO = "RuchirKadam1729/autograder-miniproj"   // ← change this
     }
 
     stages {

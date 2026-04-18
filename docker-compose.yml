@@ -73,7 +73,7 @@ services:
 
   # ── Jenkins ──────────────────────────────────────────────────────────────────
   jenkins:
-    image: jenkins/jenkins:lts-jdk17
+    build: ./jenkins
     container_name: jenkins
     restart: unless-stopped
     user: root                              # needed to install Docker CLI inside
