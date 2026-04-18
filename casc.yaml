@@ -1,0 +1,33 @@
+# Jenkins Configuration as Code
+# Automatically wires up the SonarQube server so you don't have to click through the UI.
+# Place this file at jenkins/casc.yaml — it is mounted into the container.
+
+jenkins:
+  systemMessage: "AI Exam Grader — Jenkins CI"
+  numExecutors: 2
+
+unclassified:
+  sonarGlobalConfiguration:
+    buildWrapperEnabled: true
+    installations:
+      - name: "SonarQube"
+        serverUrl: "http://sonarqube:9000"
+        credentialsId: "SONAR_TOKEN"
+        triggers:
+          skipScmCause: false
+          skipUpstreamCause: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "SONAR_TOKEN"
+              description: "SonarQube authentication token"
+              secret: "${SONAR_TOKEN}"    # set via Jenkins env or secrets file
+          - string:
+              scope: GLOBAL
+              id: "HF_TOKEN"
+              description: "Hugging Face write token for Space deployment"
+              secret: "${HF_TOKEN}"

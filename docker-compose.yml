@@ -1,0 +1,123 @@
+version: "3.8"
+
+# ── Local DevOps Stack: SonarQube + Jenkins ───────────────────────────────────
+# Usage:
+#   docker compose up -d
+#   Then open:
+#     SonarQube → http://localhost:9000  (admin / admin on first boot)
+#     Jenkins   → http://localhost:8080  (follow first-run wizard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  devops:
+    driver: bridge
+
+volumes:
+  sonar_data:
+  sonar_extensions:
+  sonar_logs:
+  jenkins_home:
+  postgres_data:
+
+services:
+
+  # ── PostgreSQL backend for SonarQube ────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: sonar-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonarqube
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - devops
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── SonarQube ────────────────────────────────────────────────────────────────
+  sonarqube:
+    image: sonarqube:10.4-community
+    container_name: sonarqube
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+      # Raise virtual memory limits (required by Elasticsearch inside SQ)
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonar_data:/opt/sonarqube/data
+      - sonar_extensions:/opt/sonarqube/extensions
+      - sonar_logs:/opt/sonarqube/logs
+    networks:
+      - devops
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q UP"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # ── Jenkins ──────────────────────────────────────────────────────────────────
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    restart: unless-stopped
+    user: root                              # needed to install Docker CLI inside
+    environment:
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+      # Pre-approve the SonarQube scanner plugin on first boot
+      JENKINS_OPTS: "--prefix=/jenkins"
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock   # allow Jenkins to run Docker
+      - ./jenkins/plugins.txt:/usr/share/jenkins/ref/plugins.txt:ro
+      - ./jenkins/casc.yaml:/var/jenkins_home/casc_configs/casc.yaml:ro
+    networks:
+      - devops
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+
+  # ── Sonar-Scanner sidecar ────────────────────────────────────────────────────
+  # Run ad-hoc analysis without installing the scanner on the host:
+  #   docker compose run --rm sonar-scanner
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:latest
+    container_name: sonar-scanner
+    profiles: ["scan"]               # only starts with: docker compose --profile scan run sonar-scanner
+    volumes:
+      - .:/usr/src
+    working_dir: /usr/src
+    environment:
+      SONAR_HOST_URL: http://sonarqube:9000
+      SONAR_TOKEN: ${SONAR_TOKEN}    # export SONAR_TOKEN=<your-token> before running
+    networks:
+      - devops
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+    command: >
+      sonar-scanner
+        -Dsonar.projectKey=exam-grader
+        -Dsonar.sources=src,app.py
+        -Dsonar.tests=tests
+        -Dsonar.python.coverage.reportPaths=coverage.xml

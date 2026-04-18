@@ -1,0 +1,8 @@
+sonar:latest
+workflow-aggregator:latest
+git:latest
+credentials:latest
+credentials-binding:latest
+pipeline-stage-view:latest
+docker-workflow:latest
+blueocean:latest
