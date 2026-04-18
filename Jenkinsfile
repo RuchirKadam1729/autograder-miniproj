@@ -10,7 +10,7 @@ pipeline {
 
     environment {
         PYTHON        = "/usr/local/bin/python3"
-        SONAR_PROJECT = "exam-grader"
+        SONAR_PROJECT = "autograder-miniproj"
         SONAR_SERVER  = "SonarQube"
         HF_REPO       = "RuchirKadam1729/autograder-miniproj"
     }
@@ -83,9 +83,9 @@ pipeline {
             steps {
                 withSonarQubeEnv(env.SONAR_SERVER) {
                     withCredentials([string(credentialsId: "SONAR_TOKEN", variable: "SONAR_AUTH")]) {
-                        withEnv(["PATH+SONAR=${tool 'sonar-scanner'}/bin"]) {
+                        withEnv(["PATH+SONAR=${tool 'SonarQube'}/bin"]) {
                             sh """
-                                sonar-scanner \\
+                                SonarQube \\
                                     -Dsonar.login=${SONAR_AUTH} \\
                                     -Dsonar.projectKey=${SONAR_PROJECT} \\
                                     -Dsonar.sources=src,app.py \\
