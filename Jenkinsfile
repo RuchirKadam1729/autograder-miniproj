@@ -9,7 +9,7 @@ pipeline {
     agent any
 
     environment {
-        PYTHON        = "python3"
+        PYTHON        = "/usr/local/bin/python3"
         SONAR_PROJECT = "exam-grader"
         SONAR_SERVER  = "SonarQube"
         HF_REPO       = "RuchirKadam1729/autograder-miniproj"
