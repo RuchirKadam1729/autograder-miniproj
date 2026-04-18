@@ -1,6 +1,6 @@
 """
-LLM client for communicating with an Ollama-backed language model.
-Handles streaming NDJSON responses and JSON extraction with fallbacks.
+LLM client backed by the Groq API (OpenAI-compatible).
+Replaces the old Ollama streaming client — no server to keep alive.
 """
 
 import json
@@ -8,11 +8,18 @@ import logging
 import re
 from typing import Any, Optional
 
-import requests
+from groq import Groq, APIError, APIConnectionError, RateLimitError
 
 from .config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",   # best quality, generous free tier
+    "llama-3.1-8b-instant",      # fastest
+    "mixtral-8x7b-32768",        # long context
+    "gemma2-9b-it",
+]
 
 
 class LLMError(Exception):
@@ -20,10 +27,15 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    """Stateless client for a single Ollama endpoint."""
+    """Thin wrapper around the Groq chat-completions API."""
 
     def __init__(self, cfg: LLMConfig) -> None:
+        if not cfg.api_key:
+            raise LLMError(
+                "GROQ_API_KEY is not set. Get one free at https://console.groq.com"
+            )
         self._cfg = cfg
+        self._client = Groq(api_key=cfg.api_key)
 
     # ------------------------------------------------------------------
     # Public API
@@ -31,90 +43,58 @@ class LLMClient:
 
     def evaluate(self, prompt: str) -> Optional[Any]:
         """
-        Send *prompt* to the model and return the parsed JSON payload.
-
-        Returns the parsed Python object on success, or ``None`` when the
-        response cannot be parsed as JSON.
-
-        Raises :class:`LLMError` for network / HTTP failures.
+        Send *prompt* to Groq and return the parsed JSON payload.
+        Returns the parsed Python object, or None if parsing fails.
+        Raises LLMError for API / network failures.
         """
-        raw = self._stream_response(prompt)
+        raw = self._call(prompt)
         return self._parse_json(raw)
 
     def is_available(self) -> bool:
-        """Smoke-test the LLM endpoint with a tiny grading prompt."""
+        """Smoke-test the API key with a tiny prompt."""
         test_prompt = (
-            'Grade this answer. Output ONLY a JSON array.\n'
-            'Format: [{"point":"test","allocated_marks":5,'
-            '"marks_awarded":3,"explanation":"ok"}]\n'
-            'Student answer: test\nJSON array only:'
+            "Output ONLY this JSON array, nothing else:\n"
+            '[{"point":"test","allocated_marks":5,"marks_awarded":3,"explanation":"ok"}]'
         )
         try:
             result = self.evaluate(test_prompt)
-            return result is not None
+            return isinstance(result, list) and len(result) > 0
         except LLMError as exc:
-            logger.warning("LLM availability check failed: %s", exc)
+            logger.warning("Groq availability check failed: %s", exc)
             return False
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _stream_response(self, prompt: str) -> str:
-        """POST the prompt and accumulate streamed NDJSON into a string."""
-        payload = {
-            "model": self._cfg.model,
-            "prompt": prompt,
-            "max_tokens": self._cfg.max_tokens,
-            "stream": self._cfg.stream,
-        }
-        headers = {"Content-Type": "application/json"}
-
+    def _call(self, prompt: str) -> str:
+        """Make a single chat-completions request and return the text."""
         try:
-            response = requests.post(
-                self._cfg.url,
-                json=payload,
-                headers=headers,
-                stream=True,
-                timeout=self._cfg.timeout_seconds,
+            completion = self._client.chat.completions.create(
+                model=self._cfg.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=self._cfg.max_tokens,
+                temperature=self._cfg.temperature,
             )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise LLMError(f"HTTP request failed: {exc}") from exc
-
-        chunks: list[str] = []
-        for raw_line in response.iter_lines():
-            if not raw_line:
-                continue
-            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
-            try:
-                chunk = json.loads(line)
-                if isinstance(chunk, dict):
-                    chunks.append(chunk.get("response", ""))
-                    if chunk.get("done", False):
-                        break
-            except json.JSONDecodeError:
-                continue
-
-        text = "".join(chunks).strip()
-        if not text:
-            raise LLMError("Empty response received from LLM stream.")
-        return text
+            return completion.choices[0].message.content or ""
+        except RateLimitError as exc:
+            raise LLMError(f"Groq rate limit hit: {exc}") from exc
+        except APIConnectionError as exc:
+            raise LLMError(f"Groq connection error: {exc}") from exc
+        except APIError as exc:
+            raise LLMError(f"Groq API error ({exc.status_code}): {exc.message}") from exc
 
     @staticmethod
     def _parse_json(text: str) -> Optional[Any]:
-        """Try several strategies to coerce *text* into a Python object."""
-        # Strip markdown fences
+        """Try several strategies to coerce text into a Python object."""
         cleaned = re.sub(r"```json\s*", "", text, flags=re.IGNORECASE)
         cleaned = re.sub(r"```\s*", "", cleaned).strip()
 
-        # Strategy 1 — direct parse
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # Strategy 2 — extract first JSON array
         match = re.search(r"\[\s*\{.*?\}\s*\]", cleaned, re.DOTALL)
         if match:
             try:
@@ -122,7 +102,6 @@ class LLMClient:
             except json.JSONDecodeError:
                 pass
 
-        # Strategy 3 — fix common encoding issues and trailing commas
         fixed = (
             cleaned
             .replace("\u201c", '"').replace("\u201d", '"')
@@ -134,7 +113,5 @@ class LLMClient:
         except json.JSONDecodeError:
             pass
 
-        logger.error(
-            "JSON parse failed. First 200 chars: %s", cleaned[:200]
-        )
+        logger.error("JSON parse failed. First 200 chars: %s", cleaned[:200])
         return None

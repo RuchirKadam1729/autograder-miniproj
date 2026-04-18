@@ -1,6 +1,7 @@
 """
 Gradio frontend for the AI Exam Grader.
 Entry point for Hugging Face Spaces (file: app.py).
+LLM powered by Groq API — no server to keep running.
 """
 
 import logging
@@ -22,6 +23,7 @@ from src import (
     load_synoptic,
     setup_logging,
 )
+from src.llm_client import GROQ_MODELS
 
 # ---------------------------------------------------------------------------
 # Init
@@ -30,9 +32,7 @@ from src import (
 setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded globals so Spaces doesn't OOM on cold start
 _vision_model: VisionModel | None = None
-_llm_client: LLMClient | None = None
 _app_config = AppConfig()
 
 
@@ -44,44 +44,34 @@ def _get_vision() -> VisionModel:
     return _vision_model
 
 
-def _get_llm(llm_url: str, llm_model: str) -> LLMClient:
-    """Return a (possibly cached) LLM client for the given endpoint."""
-    cfg = LLMConfig(url=llm_url, model=llm_model)
+def _get_llm(api_key: str, model: str) -> LLMClient:
+    cfg = LLMConfig(api_key=api_key.strip(), model=model.strip())
     return LLMClient(cfg)
 
 
 # ---------------------------------------------------------------------------
-# Gradio callback handlers
+# Gradio callbacks
 # ---------------------------------------------------------------------------
 
-
-def check_llm_connection(llm_url: str, llm_model: str) -> str:
-    """Ping the LLM and report back to the UI."""
-    if not llm_url.strip():
-        return "⚠️ Please enter an LLM URL first."
-    client = _get_llm(llm_url.strip(), llm_model.strip())
+def check_groq_connection(api_key: str, model: str) -> str:
+    if not api_key.strip():
+        return "⚠️ Paste your Groq API key first."
+    try:
+        client = _get_llm(api_key, model)
+    except Exception as exc:
+        return f"❌ {exc}"
     if client.is_available():
-        return f"✅ Connected to **{llm_model}** at `{llm_url}`"
-    return f"❌ Could not reach LLM at `{llm_url}`. Check the URL and that Ollama is running."
+        return f"✅ Groq connected — model **{model}** is ready."
+    return "❌ Groq responded but the test failed. Check your key."
 
 
-def grade_paper(
-    paper_file,
-    synoptic_file,
-    llm_url: str,
-    llm_model: str,
-) -> tuple[str, pd.DataFrame | None, str]:
-    """
-    Main grading callback.
-
-    Returns (status_message, results_dataframe, report_text).
-    """
+def grade_paper(paper_file, synoptic_file, api_key: str, model: str):
     if paper_file is None:
         return "⚠️ Upload a student answer PDF.", None, ""
     if synoptic_file is None:
         return "⚠️ Upload a marking scheme (Excel/CSV).", None, ""
-    if not llm_url.strip():
-        return "⚠️ Enter the Ollama LLM URL.", None, ""
+    if not api_key.strip():
+        return "⚠️ Enter your Groq API key.", None, ""
 
     try:
         syn_df = load_synoptic(synoptic_file.name)
@@ -91,10 +81,10 @@ def grade_paper(
 
     try:
         vision = _get_vision()
-        llm = _get_llm(llm_url.strip(), llm_model.strip())
+        llm = _get_llm(api_key, model)
         pipeline = GradingPipeline(_app_config, vision, llm)
     except Exception as exc:
-        return f"❌ Model initialisation failed: {exc}", None, ""
+        return f"❌ Initialisation failed: {exc}", None, ""
 
     with tempfile.TemporaryDirectory() as tmp:
         result = pipeline.run(
@@ -107,81 +97,65 @@ def grade_paper(
         return f"❌ Pipeline failed: {result.reason}", None, ""
 
     status = (
-        f"✅ Graded **{result.paper_name}**  →  "
+        f"✅ **{result.paper_name}** graded →  "
         f"**{result.total_score:.1f} / {result.total_max:.1f}** "
         f"({result.percentage:.1f}%)"
     )
-
-    # Pretty-print the breakdown table
     display_df = result.graded_df[["question", "subpart", "marks_awarded", "max_marks"]].copy()
     display_df.columns = ["Question", "Subpart", "Awarded", "Max"]
-
     return status, display_df, result.report_text
 
 
 # ---------------------------------------------------------------------------
-# Gradio UI definition
+# UI
 # ---------------------------------------------------------------------------
 
 DESCRIPTION = """
 # 📝 AI Exam Grader
+Automated marking of handwritten student answer PDFs using  
+**Florence-2** (vision OCR) + **Groq LLaMA 3.3** (rubric grading).
 
-Automated marking of handwritten student answer PDFs using **Florence-2** (vision OCR)
-and an **Ollama LLM** (e.g. Qwen 2.5) for rubric-based grading.
-
-### How to use
-1. Set the **LLM URL** to your Ollama endpoint (ngrok or local).
-2. Upload the **student answer PDF** and the **marking scheme** (`.xlsx` or `.csv`).
-3. Click **Grade Paper** and wait for the results.
+No servers to keep alive — just paste your free [Groq API key](https://console.groq.com).
 """
 
-SYNOPTIC_COLUMNS_INFO = """
-**Marking scheme columns required:**
-| column | description |
-|---|---|
-| `question` | e.g. `Q1`, `Q2` |
-| `subpart` | e.g. `a`, `b`, `-` (for undivided questions) |
-| `max_marks` | numeric |
-| `content` | the full marking scheme text for this part |
+SYNOPTIC_INFO = """
+**Marking scheme columns required:**  
+`question` · `subpart` · `max_marks` · `content`
 """
 
 with gr.Blocks(theme=gr.themes.Soft(), title="AI Exam Grader") as demo:
     gr.Markdown(DESCRIPTION)
 
     with gr.Row():
+        # ── Left panel ───────────────────────────────────────────────────────
         with gr.Column(scale=1):
-            gr.Markdown("### ⚙️ Configuration")
-            llm_url_box = gr.Textbox(
-                label="Ollama LLM URL",
-                placeholder="https://your-ngrok-url.ngrok-free.app/api/generate",
-                value=os.getenv("LLM_URL", ""),
+            gr.Markdown("### 🔑 Groq API")
+            api_key_box = gr.Textbox(
+                label="Groq API Key",
+                placeholder="gsk_...",
+                type="password",
+                value=os.getenv("GROQ_API_KEY", ""),
             )
-            llm_model_box = gr.Textbox(
-                label="Model name",
-                value=os.getenv("LLM_MODEL", "qwen2.5:7b-instruct"),
+            model_dd = gr.Dropdown(
+                label="Model",
+                choices=GROQ_MODELS,
+                value=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             )
-            test_btn = gr.Button("🔌 Test LLM Connection", variant="secondary")
-            connection_status = gr.Markdown("")
-
-            test_btn.click(
-                fn=check_llm_connection,
-                inputs=[llm_url_box, llm_model_box],
-                outputs=connection_status,
-            )
+            test_btn = gr.Button("🔌 Test Connection", variant="secondary")
+            conn_status = gr.Markdown("")
+            test_btn.click(check_groq_connection, [api_key_box, model_dd], conn_status)
 
             gr.Markdown("---")
             gr.Markdown("### 📂 Upload Files")
-            paper_upload = gr.File(
-                label="Student Answer PDF",
-                file_types=[".pdf"],
-            )
+            paper_upload = gr.File(label="Student Answer PDF", file_types=[".pdf"])
             synoptic_upload = gr.File(
                 label="Marking Scheme (Excel / CSV)",
                 file_types=[".xlsx", ".xls", ".csv"],
             )
-            gr.Markdown(SYNOPTIC_COLUMNS_INFO)
+            gr.Markdown(SYNOPTIC_INFO)
             grade_btn = gr.Button("🎓 Grade Paper", variant="primary", size="lg")
 
+        # ── Right panel ──────────────────────────────────────────────────────
         with gr.Column(scale=2):
             gr.Markdown("### 📊 Results")
             status_box = gr.Markdown("")
@@ -199,7 +173,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="AI Exam Grader") as demo:
 
     grade_btn.click(
         fn=grade_paper,
-        inputs=[paper_upload, synoptic_upload, llm_url_box, llm_model_box],
+        inputs=[paper_upload, synoptic_upload, api_key_box, model_dd],
         outputs=[status_box, results_table, report_box],
     )
 

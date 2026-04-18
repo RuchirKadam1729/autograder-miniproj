@@ -19,16 +19,15 @@ def setup_logging(level: str = "INFO") -> None:
 
 @dataclass
 class LLMConfig:
-    """LLM (Ollama) connection settings."""
-    url: str = field(
-        default_factory=lambda: os.getenv("LLM_URL", "http://localhost:11434/api/generate")
+    """Groq API connection settings."""
+    api_key: str = field(
+        default_factory=lambda: os.getenv("GROQ_API_KEY", "")
     )
     model: str = field(
-        default_factory=lambda: os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")
+        default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     )
-    max_tokens: int = 500
-    timeout_seconds: int = 120
-    stream: bool = True
+    max_tokens: int = 1024
+    temperature: float = 0.1      # low temp = more deterministic JSON
 
 
 @dataclass
