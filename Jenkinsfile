@@ -83,9 +83,9 @@ pipeline {
             steps {
                 withSonarQubeEnv(env.SONAR_SERVER) {
                     withCredentials([string(credentialsId: "SONAR_TOKEN", variable: "SONAR_AUTH")]) {
-                        withEnv(["PATH+SONAR=${tool 'SonarQube'}/bin"]) {
+                        withEnv(["PATH+SONAR=${tool 'sonar-scanner'}/bin"]) {
                             sh """
-                                SonarQube \\
+                                sonar-scanner \\
                                     -Dsonar.login=${SONAR_AUTH} \\
                                     -Dsonar.projectKey=${SONAR_PROJECT} \\
                                     -Dsonar.sources=src,app.py \\
